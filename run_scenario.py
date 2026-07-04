@@ -8,13 +8,18 @@ speichert sie als .npy + Ground-Truth-JSON und validiert das Ergebnis
 """
 
 import json
+from pathlib import Path
+
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from prsim import (Transmitter, Receiver, Target, StaticScatterer,
-                   Scenario, generate, C0)
+                   Scenario, generate, batch_caf, C0)
+
+OUT = Path(__file__).parent / "output"
+OUT.mkdir(exist_ok=True)
 
 # ── 1. Szenario definieren ─────────────────────────────────────────────
 # Koordinaten: lokales ENU-System in Metern, z = Höhe.
@@ -49,36 +54,19 @@ sc = Scenario(tx=tx, rx=rx, targets=targets, scatterers=scatterers,
 result = generate(sc)
 ref, surv, fs = result["ref"], result["surv"], result["fs"]
 
-np.save("ref_channel.npy", ref.astype(np.complex64))
-np.save("surv_channel.npy", surv.astype(np.complex64))
-with open("scenario_groundtruth.json", "w") as f:
+np.save(OUT / "ref_channel.npy", ref.astype(np.complex64))
+np.save(OUT / "surv_channel.npy", surv.astype(np.complex64))
+with open(OUT / "scenario_groundtruth.json", "w") as f:
     json.dump({"fs_hz": fs, "fc_hz": result["fc"], "cpi_s": result["cpi"],
                "targets": result["ground_truth"]}, f, indent=2)
-print("\nGespeichert: ref_channel.npy, surv_channel.npy, "
-      "scenario_groundtruth.json")
+print("\nGespeichert: output/ref_channel.npy, output/surv_channel.npy, "
+      "output/scenario_groundtruth.json")
 
 
 # ── 3. Validierung: Range-Doppler-Map über Batch-CAF ───────────────────
-def batch_caf(ref_sig, surv_sig, fs, n_delay=800, batch_len=4096):
-    """
-    Schnelle Kreuzambiguitätsfunktion über das Batch-Verfahren:
-    Signal in K Blöcke teilen, pro Block zirkulare Kreuzkorrelation
-    (per FFT), dann FFT über die Blockachse -> Dopplerachse.
-    Gültig für Delays << batch_len; Doppler eindeutig bis ±fs/(2*batch_len).
-    """
-    K = len(ref_sig) // batch_len
-    r = ref_sig[:K * batch_len].reshape(K, batch_len)
-    s = surv_sig[:K * batch_len].reshape(K, batch_len)
-    corr = np.fft.ifft(np.fft.fft(s, axis=1) * np.conj(np.fft.fft(r, axis=1)),
-                       axis=1)[:, :n_delay]
-    caf = np.fft.fftshift(np.fft.fft(corr, axis=0), axes=0)
-    doppler = np.fft.fftshift(np.fft.fftfreq(K, batch_len / fs))
-    return caf, doppler
-
-
 print("\nBerechne Range-Doppler-Map zur Validierung ...")
 n_delay = 800
-caf, doppler_axis = batch_caf(ref, surv, fs, n_delay=n_delay)
+caf, doppler_axis = batch_caf(ref, surv, fs, n_delay=n_delay, batch_len=4096)
 caf_db = 20 * np.log10(np.abs(caf) + 1e-12)
 caf_db -= caf_db.max()
 
@@ -115,8 +103,8 @@ for gt in result["ground_truth"]:
                  color="white", weight="bold", fontsize=9)
 
 plt.tight_layout()
-plt.savefig("rd_map_validation.png", dpi=130)
-print("Plot gespeichert: rd_map_validation.png")
+plt.savefig(OUT / "rd_map_validation.png", dpi=130)
+print("Plot gespeichert: output/rd_map_validation.png")
 
 # Peak-Kontrolle: liegt in der Nähe jeder Ground-Truth-Position ein Maximum?
 print("\nPeak-Verifikation (Suchfenster ±5 Range-Bins / ±4 Doppler-Bins):")

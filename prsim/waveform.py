@@ -1,28 +1,37 @@
 """
-DVB-T-Sendesignal (Illuminator of Opportunity) als komplexes Basisbandsignal.
+Sendesignale der Illuminatoren of Opportunity als komplexe Basisbandsignale.
 
-Implementiert einen vereinfachten, aber strukturell korrekten DVB-T-Modulator
-nach ETSI EN 300 744 (2k-Modus, 8-MHz-Kanal):
+Drei Waveforms, entsprechend den drei Empfangsantennen des Systems:
 
-- FFT-Länge 2048, davon 1705 aktive Träger
-- 64-QAM-Nutzdaten (zufällige Bits — der Inhalt ist für Radar irrelevant,
-  die *Struktur* nicht)
-- Scattered Pilots (alle 12 Träger, Offset rotiert pro Symbol) und
-  Continual Pilots mit 4/3-Boost, BPSK-moduliert mit der PRBS aus der Norm
-- TPS-Träger (hier: zufälliges BPSK, Inhalt irrelevant)
-- Guard-Intervall als zyklisches Präfix
+  generate_dvbt() — DVB-T nach ETSI EN 300 744 (2k-Modus, 8-MHz-Kanal):
+      1705 aktive Träger, 64-QAM-Nutzdaten, Scattered/Continual Pilots
+      mit 4/3-Boost und PRBS-Modulation, TPS-Träger, Guard-Intervall.
+      Pilotstruktur und Guard erzeugen deterministische Nebenmaxima in
+      der Ambiguity-Funktion.
 
-Warum kein weißes Rauschen als Ersatz? Die Pilotstruktur und das
-Guard-Intervall erzeugen deterministische Nebenmaxima in der
-Ambiguity-Funktion, mit denen die Signalverarbeitung eines echten
-Passivradars umgehen muss. Ein Generator, der das nicht abbildet,
-testet die Algorithmen nicht realistisch.
+  generate_dab() — DAB nach ETSI EN 300 401 (Mode I, Band III):
+      1536 Träger, pi/4-DQPSK, Guard-Intervall, Rahmenstruktur mit
+      NULL-Symbol (96-ms-Rahmen). Das NULL-Symbol erzeugt periodische
+      Artefakte in der Ambiguity-Funktion.
+
+  generate_fm() — UKW-Rundfunk (Stereo-Multiplex):
+      Audio (0-15 kHz) + 19-kHz-Pilotton + Stereo-Differenz um 38 kHz,
+      Frequenzmodulation mit 75 kHz Hub. Die Radareigenschaften hängen
+      vom Programminhalt ab (content="music" oder "speech") — der
+      bekannteste Schwachpunkt FM-basierter Passivradare.
+
+Warum kein weißes Rauschen als Ersatz? Die jeweilige Signalstruktur
+bestimmt die Ambiguity-Funktion, mit der die Signalverarbeitung eines
+echten Passivradars umgehen muss. Nur der Nutzinhalt (Bits bzw. Audio)
+ist zufällig — für Radarzwecke irrelevant.
 """
 
 import numpy as np
 
 # Elementartakt eines 8-MHz-DVB-T-Kanals: 64/7 MHz
 FS_DVBT = 64e6 / 7
+# Elementartakt DAB (alle Modi): 2,048 MHz
+FS_DAB = 2.048e6
 
 _NFFT = 2048          # 2k-Modus
 _K = 1705             # aktive Träger (Index 0..1704, Mitte = 852)
@@ -98,3 +107,111 @@ def generate_dvbt(n_samples: int, guard: float = 1 / 8,
 
     out = out[:n_samples]
     return out / np.sqrt(np.mean(np.abs(out) ** 2))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DAB (EN 300 401, Mode I)
+# ═══════════════════════════════════════════════════════════════════════
+
+_DAB_NFFT = 2048       # Tu = 2048 Samples bei 2,048 MHz (Mode I)
+_DAB_K = 1536          # aktive Träger: -768..-1, +1..+768 (DC frei)
+_DAB_NG = 504          # Guard-Intervall
+_DAB_NULL = 2656       # Länge NULL-Symbol
+_DAB_SYMS = 76         # OFDM-Symbole pro Rahmen (inkl. Phasenreferenz)
+# Rahmenlänge: 2656 + 76*(2048+504) = 196608 Samples = 96 ms
+
+
+def generate_dab(n_samples: int, seed: int | None = None) -> np.ndarray:
+    """
+    Erzeugt ein DAB-Basisbandsignal (Mode I) mit mindestens n_samples
+    Samples bei fs = FS_DAB, normiert auf mittlere Leistung 1.
+
+    Strukturell korrekt sind Rahmenaufbau (NULL-Symbol!), Trägerbelegung,
+    Guard-Intervall und die differenzielle pi/4-DQPSK über die Symbole.
+    Vereinfachung: das Phasenreferenzsymbol nutzt zufällige statt der
+    genormten CAZAC-Phasen (für die Radar-Ambiguity unerheblich).
+    """
+    rng = np.random.default_rng(seed)
+    sym_len = _DAB_NFFT + _DAB_NG
+    frame_len = _DAB_NULL + _DAB_SYMS * sym_len
+    n_frames = int(np.ceil(n_samples / frame_len))
+
+    # Trägerindizes im FFT-Raster (DC bleibt frei)
+    k = np.concatenate([np.arange(-_DAB_K // 2, 0), np.arange(1, _DAB_K // 2 + 1)])
+    fft_bins = k % _DAB_NFFT
+
+    out = np.zeros(n_frames * frame_len, dtype=np.complex128)
+    pos = 0
+    for _ in range(n_frames):
+        pos += _DAB_NULL                       # NULL-Symbol: Sender aus
+        # Phasenreferenzsymbol (Start der differenziellen Modulation)
+        phase = np.exp(2j * np.pi * rng.integers(0, 4, _DAB_K) / 4)
+        for _l in range(_DAB_SYMS):
+            spec = np.zeros(_DAB_NFFT, dtype=np.complex128)
+            spec[fft_bins] = phase
+            sym = np.fft.ifft(spec) * _DAB_NFFT / np.sqrt(_DAB_K)
+            out[pos:pos + _DAB_NG] = sym[-_DAB_NG:]
+            out[pos + _DAB_NG:pos + sym_len] = sym
+            pos += sym_len
+            # pi/4-DQPSK: Phaseninkrement pi/4 + m*pi/2 pro Träger
+            inc = np.pi / 4 + np.pi / 2 * rng.integers(0, 4, _DAB_K)
+            phase = phase * np.exp(1j * inc)
+
+    out = out[:n_samples]
+    return out / np.sqrt(np.mean(np.abs(out) ** 2))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UKW-Rundfunk (FM-Stereo-Multiplex)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _lowpass_noise(n: int, cutoff_hz: float, fs: float,
+                   rng: np.random.Generator) -> np.ndarray:
+    """Bandbegrenztes Gauß-Rauschen (Brickwall-Tiefpass im Frequenzbereich),
+    normiert auf Standardabweichung 1."""
+    spec = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1 / fs)
+    spec[f > cutoff_hz] = 0.0
+    x = np.fft.irfft(spec, n)
+    return x / np.std(x)
+
+
+def generate_fm(n_samples: int, fs: float, content: str = "music",
+                deviation_hz: float = 75e3,
+                seed: int | None = None) -> np.ndarray:
+    """
+    Erzeugt ein UKW-Rundfunksignal (Stereo-MPX, FM-moduliert) bei
+    Abtastrate fs (empfohlen >= 300 kHz, Carson-Bandbreite ~256 kHz).
+    Konstante Einhüllende, mittlere Leistung 1.
+
+    content:
+      "music"  — breitbandiges Audio (rauschartig): gutmütige,
+                 schmale Ambiguity-Funktion
+      "speech" — bandbegrenztes Audio mit Sprechpausen: zeitweise
+                 fast unmodulierter Träger -> schlechte Range-Auflösung,
+                 stark schwankende Radarleistung (Worst Case für FM-PCL)
+    """
+    rng = np.random.default_rng(seed)
+    t = np.arange(n_samples) / fs
+
+    if content == "music":
+        l_plus_r = _lowpass_noise(n_samples, 15e3, fs, rng)
+        l_minus_r = _lowpass_noise(n_samples, 15e3, fs, rng)
+    elif content == "speech":
+        # Silbenrhythmus: Ein/Aus-Hüllkurve aus sehr langsamem Rauschen
+        env = np.clip(_lowpass_noise(n_samples, 1.5, fs, rng), 0.0, None)
+        l_plus_r = _lowpass_noise(n_samples, 4e3, fs, rng) * env
+        rms = np.sqrt(np.mean(l_plus_r ** 2))
+        l_plus_r /= max(rms, 1e-12)
+        l_minus_r = np.zeros(n_samples)        # Sprache: mono
+    else:
+        raise ValueError(f"Unbekannter FM-Inhalt: {content!r}")
+
+    # Stereo-Multiplex: Mono + 19-kHz-Pilot + DSB-Differenzsignal um 38 kHz
+    mpx = (0.45 * l_plus_r
+           + 0.09 * np.sin(2 * np.pi * 19e3 * t)
+           + 0.45 * l_minus_r * np.sin(2 * np.pi * 38e3 * t))
+    mpx /= np.max(np.abs(mpx)) + 1e-12         # Spitzenhub = deviation_hz
+
+    phase = 2 * np.pi * deviation_hz * np.cumsum(mpx) / fs
+    return np.exp(1j * phase)

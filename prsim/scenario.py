@@ -16,7 +16,7 @@ um die nachgelagerte Signalverarbeitung validieren zu können.
 from dataclasses import dataclass, field
 import numpy as np
 
-from .waveform import generate_dvbt, FS_DVBT
+from .waveform import generate_dvbt, generate_dab, generate_fm, FS_DVBT, FS_DAB
 from .geometry import (Transmitter, Receiver, Target, StaticScatterer, C0,
                        bistatic_delay, bistatic_range, doppler_hz, baseline,
                        direct_rx_power, target_rx_power, noise_power)
@@ -30,8 +30,10 @@ class Scenario:
     rx: Receiver
     targets: list = field(default_factory=list)
     scatterers: list = field(default_factory=list)
-    fs: float = FS_DVBT
-    n_samples: int = 2 ** 21        # CPI = n_samples / fs  (~0.23 s)
+    illuminator: str = "dvbt"       # "dvbt" | "dab" | "fm"
+    fs: float = FS_DVBT             # dvbt: FS_DVBT, dab: FS_DAB, fm: frei (>=300 kHz)
+    n_samples: int = 2 ** 21        # CPI = n_samples / fs
+    fm_content: str = "music"       # nur für illuminator="fm"
     seed: int | None = 1
 
     # Impairments
@@ -60,9 +62,21 @@ def generate(sc: Scenario) -> dict:
     delays += [baseline(sc.tx, sc.rx) / C0]
     preroll = int(np.ceil(max(delays) * sc.fs)) + 8
 
-    print(f"Erzeuge DVB-T-Sendesignal ({N + preroll} Samples, "
-          f"CPI = {sc.cpi * 1e3:.0f} ms) ...")
-    tx_sig = generate_dvbt(N + preroll, seed=sc.seed)
+    print(f"Erzeuge {sc.illuminator.upper()}-Sendesignal ({N + preroll} "
+          f"Samples, CPI = {sc.cpi * 1e3:.0f} ms) ...")
+    if sc.illuminator == "dvbt":
+        if not np.isclose(sc.fs, FS_DVBT):
+            raise ValueError(f"DVB-T erfordert fs = FS_DVBT = {FS_DVBT:.0f} Hz")
+        tx_sig = generate_dvbt(N + preroll, seed=sc.seed)
+    elif sc.illuminator == "dab":
+        if not np.isclose(sc.fs, FS_DAB):
+            raise ValueError(f"DAB erfordert fs = FS_DAB = {FS_DAB:.0f} Hz")
+        tx_sig = generate_dab(N + preroll, seed=sc.seed)
+    elif sc.illuminator == "fm":
+        tx_sig = generate_fm(N + preroll, sc.fs, content=sc.fm_content,
+                             seed=sc.seed)
+    else:
+        raise ValueError(f"Unbekannter Illuminator: {sc.illuminator!r}")
 
     # ── Leistungsbilanz ──────────────────────────────────────────────
     p_noise = noise_power(sc.fs, sc.rx.noise_figure_db)
@@ -133,6 +147,7 @@ def generate(sc: Scenario) -> dict:
     return {
         "ref": ref,
         "surv": surv,
+        "illuminator": sc.illuminator,
         "fs": sc.fs,
         "fc": fc,
         "cpi": sc.cpi,

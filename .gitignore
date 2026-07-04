@@ -1,0 +1,6 @@
+# Python
+__pycache__/
+*.pyc
+
+# Generierte Daten und Plots
+output/

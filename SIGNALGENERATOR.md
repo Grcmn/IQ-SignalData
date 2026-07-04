@@ -1,8 +1,9 @@
 # Signalgenerator für ein Passivradar-Software-in-the-Loop-System
 
 Das Paket `prsim` erzeugt realistische I/Q-Basisbanddaten der beiden
-Empfangskanäle eines DVB-T-Passivradars — genau die Datenströme, die in
-echter Hardware hinter dem ADC anliegen würden. Die nachgelagerte
+Empfangskanäle eines Passivradars mit **FM-, DAB- und
+DVB-T-Empfangsantennen** — genau die Datenströme, die in echter Hardware
+hinter dem ADC anliegen würden. Die nachgelagerte
 Signalverarbeitung (CAF, Clutter-Unterdrückung, Detektion, Tracking) kann
 damit unter kontrollierten, wiederholbaren Bedingungen mit bekannter
 Ground Truth getestet werden — das ist der Kern eines
@@ -35,21 +36,34 @@ Lagrange-Interpolation (Farrow-Struktur, 4 Stützstellen) ausgewertet
 
 | Modul | Inhalt |
 |---|---|
-| [waveform.py](prsim/waveform.py) | DVB-T-Modulator (2k-Modus n. EN 300 744): 1705 Träger, 64-QAM, Scattered/Continual Pilots mit PRBS und 4/3-Boost, TPS-Träger, Guard-Intervall |
+| [waveform.py](prsim/waveform.py) | Drei Illuminator-Waveforms: DVB-T (2k-Modus n. EN 300 744: 1705 Träger, 64-QAM, Pilots mit PRBS und 4/3-Boost, TPS, Guard), DAB (Mode I n. EN 300 401: 1536 Träger, pi/4-DQPSK, NULL-Symbol-Rahmenstruktur), FM (Stereo-MPX mit 19-kHz-Pilot, 75 kHz Hub, Programminhalt "music"/"speech") |
 | [geometry.py](prsim/geometry.py) | Sender/Empfänger/Ziele als 3D-Objekte, bistatische Laufzeit & Range, Doppler, bistatische Radargleichung, Friis, kTB-Rauschleistung |
 | [channel.py](prsim/channel.py) | Zeitvariable fraktionale Verzögerung (Signalmodell oben) |
 | [receiver.py](prsim/receiver.py) | AWGN, LO-Phasenrauschen (Wiener-Prozess, gemeinsamer oder getrennter LO), ADC-Quantisierung mit Clipping und Crest-Faktor-Headroom |
-| [scenario.py](prsim/scenario.py) | Szenariodefinition, Orchestrierung, Ground-Truth-Export |
+| [scenario.py](prsim/scenario.py) | Szenariodefinition (inkl. Illuminator-Wahl), Orchestrierung, Ground-Truth-Export |
+| [analysis.py](prsim/analysis.py) | Batch-CAF (Range-Doppler-Map) zur Validierung — gehört konzeptionell zur nachgelagerten Verarbeitung |
 
-## Warum ein echtes DVB-T-Signal statt weißem Rauschen?
+## Warum echte Signalstrukturen statt weißem Rauschen?
 
-Die Pilotträger und das Guard-Intervall von DVB-T erzeugen
-**deterministische Nebenmaxima** in der Ambiguity-Funktion (bekanntes
-Problem der Passivradar-Literatur, Stichwort *DVB-T ambiguity function
-sidelobes*). Ein Detektor, der nur an weißem Rauschen getestet wurde,
-produziert an echten Signalen Geisterziele. Der Generator bildet die
-Signalstruktur deshalb normnah ab; nur der Nutzdateninhalt ist zufällig
-(für Radarzwecke irrelevant).
+Jeder Illuminator hat charakteristische Eigenheiten, die die Ambiguity-
+Funktion prägen und mit denen echte Verarbeitungsketten umgehen müssen:
+
+- **DVB-T:** Pilotträger und Guard-Intervall erzeugen **deterministische
+  Nebenmaxima** — u.a. Doppler-Linien bei ±1/(4·T_S) ≈ ±992 Hz (das
+  Scattered-Pilot-Muster wiederholt sich alle 4 Symbole). Diese Linien
+  sind in der Validierungsgrafik sichtbar und entsprechen dem
+  Literaturwert.
+- **DAB:** Die 96-ms-Rahmenstruktur mit NULL-Symbol erzeugt periodische
+  Artefakte in der Range-Doppler-Map.
+- **FM:** Die Radareigenschaften hängen vom **Programminhalt** ab
+  (`fm_content="music"` vs. `"speech"`); zusammen mit dem sehr starken
+  Direktsignal (INR ~60 dB) ist FM-PCL sockelbegrenzt — ohne adaptive
+  DPI-Filterung (ECA) heben sich Ziele nur wenige dB ab. Genau dieses
+  Verhalten reproduziert der Generator.
+
+Ein Detektor, der nur an weißem Rauschen getestet wurde, produziert an
+echten Signalen Geisterziele. Nur der Nutzinhalt (Bits/Audio) ist
+zufällig — für Radarzwecke irrelevant.
 
 ## Leistungsbilanz statt gesetzter SNR-Werte
 
@@ -66,21 +80,30 @@ Rauschen** und werden erst durch den Integrationsgewinn der CAF
 
 ## Verwendung
 
-```python
-python run_scenario.py
+```
+python run_scenario.py            # DVB-T-Einzelszenario + Validierung
+python run_scenario_multiband.py  # dieselbe Szene über FM, DAB und DVB-T
 ```
 
-erzeugt `ref_channel.npy`, `surv_channel.npy` (complex64),
-`scenario_groundtruth.json` (bistatische Range, Doppler, SNR je Ziel) und
-validiert das Szenario über eine Batch-CAF-Range-Doppler-Map
-(`rd_map_validation.png`). Eigene Szenarien: `Transmitter`, `Receiver`,
-`Target`, `StaticScatterer` und `Scenario` instanziieren, `generate()`
-aufrufen.
+`run_scenario.py` erzeugt `ref_channel.npy`, `surv_channel.npy`
+(complex64), `scenario_groundtruth.json` (bistatische Range, Doppler, SNR
+je Ziel) und validiert über eine Range-Doppler-Map
+(`rd_map_validation.png`).
+
+`run_scenario_multiband.py` erzeugt `ref_{fm,dab,dvbt}.npy` /
+`surv_{fm,dab,dvbt}.npy` + Ground Truth und die Vergleichsgrafik
+`rd_map_multiband.png` — sie zeigt direkt, wie die Range-Auflösung mit
+der Signalbandbreite skaliert (~1 km / ~150 m / ~40 m).
+
+Eigene Szenarien: `Transmitter`, `Receiver`, `Target`, `StaticScatterer`
+und `Scenario` (mit `illuminator="dvbt" | "dab" | "fm"`) instanziieren,
+`generate()` aufrufen. Für DVB-T/DAB ist `fs` durch die Norm festgelegt
+(`FS_DVBT`, `FS_DAB`); für FM frei wählbar (>= 300 kHz).
 
 ## Sinnvolle Erweiterungen (Ausbaustufen für die Arbeit)
 
-1. **Weitere Illuminatoren:** FM-Rundfunk (schmalbandig, inhaltabhängige
-   Ambiguity), DAB (OFDM mit Null-Symbol) — nur `waveform.py` erweitern.
+1. **FM-Inhaltsstudie:** `fm_content="speech"` vs. `"music"` — wie stark
+   degradiert die Detektionsleistung bei Sprechpausen?
 2. **Wegpunkt-/Kurven-Trajektorien** statt geradliniger Bewegung
    (nur `Target.pos(t)` austauschen — der Rest bleibt korrekt, weil alles
    aus τ(t) folgt).
