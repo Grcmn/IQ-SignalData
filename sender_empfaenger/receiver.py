@@ -28,6 +28,32 @@ def receive(tx_iq):
     return tx_iq.copy()
 
 
+def receive_array(s, a, dtype=np.complex64):
+    """Direktpfad-Empfang an einem Antennenarray.
+
+    Ebene Welle aus Richtung phi_tx: jedes Element sieht dasselbe Signal,
+    nur mit eigener Phasenlage aus dem Steering-Vektor a:
+
+        X_n(t) = a_n * s(t)
+
+    Parameter
+    ---------
+    s : (M,) complex        Basisbandsignal des Senders
+    a : (N,) complex        Steering-Vektor des Arrays
+    Rueckgabe
+    ---------
+    X : (N, M) complex      Kanalmatrix, ein Zeile je Antennenelement
+
+    Hier fehlen bewusst die gemeinsame Laufzeit tau = R/c und die
+    Freiraumdaempfung des Direktpfads: beide wirken auf *alle* Kanaele
+    gleich und aendern ohne Rauschen und ohne zweiten Pfad nichts an den
+    Phasendifferenzen zwischen den Kanaelen. Sobald ein Zielecho dazu-
+    kommt, gehoeren sie an genau diese Stelle — als gemeinsamer Faktor
+    amp * s(t - tau), realisiert ueber eine (fraktionale) Verzoegerung.
+    """
+    return (a[:, None] * s[None, :]).astype(dtype)
+
+
 def fm_demodulate(iq, fs):
     """FM-Demodulation: rekonstruiert das MPX-Basisband aus I/Q.
 
