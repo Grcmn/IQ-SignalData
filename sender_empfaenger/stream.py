@@ -20,7 +20,7 @@ import numpy as np
 from uca import (N_ELEMENTS, azimuth, element_phases, radius_from_spacing,
                  steering_vector, wavelength)
 from receiver import receive_array
-from transmitter import FMStream
+from transmitter import DEVIATION_HZ, FMStream
 
 # --- Parameter des Szenarios -----------------------------------------
 # Einzige Stelle, an der die Kenngroessen des Streams festgelegt werden.
@@ -31,7 +31,9 @@ D_OVER_LAMBDA = 0.4     # Elementabstand d als Vielfaches von lambda
 ARRAY_RADIUS_M = None   # r direkt vorgeben; None -> aus d berechnen
 TX_POS_M = (5_000.0, 3_000.0)   # Senderposition [m]
 RX_POS_M = (0.0, 0.0)           # Arrayzentrum des Empfaengers [m]
-DEVIATION_HZ = 75e3     # Frequenzhub der FM [Hz]
+# DEVIATION_HZ wird aus transmitter.py uebernommen (dort steht die Norm
+# des UKW-Rundfunks: 75 kHz) und hier nur re-exportiert, damit run.py alle
+# Szenarioparameter aus einem Modul beziehen kann.
 BLOCK_SIZE = 4096       # Samples je Streaming-Block
 N_BLOCKS = 20           # Anzahl Bloecke der Demo
 MODE = "mpx"            # Modulationsquelle: "tones" oder "mpx"

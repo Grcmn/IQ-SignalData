@@ -12,14 +12,21 @@ Zwei Grafiken, nach Fragestellung getrennt:
 Aufruf ueber run.py --plot.
 """
 
+import os
+
 import matplotlib
 matplotlib.use("Agg")           # kein Fenster noetig, nur PNG-Ausgabe
 import matplotlib.pyplot as plt
 import numpy as np
 
 from receiver import fm_demodulate
-from transmitter import DEFAULT_TONES, PILOT_HZ, SUBCARRIER_HZ
+from transmitter import DEFAULT_TONES, PILOT_HZ, SUBCARRIER_HZ, FMStream
 from uca import element_positions
+
+# PNGs immer neben dieses Modul legen, nicht ins aktuelle Arbeitsver-
+# zeichnis — sonst landen sie je nach Aufrufort woanders als die README,
+# die sie einbindet.
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def plot_signal(x, fs, mode="mpx", deviation_hz=75e3, fname="signal.png"):
@@ -53,19 +60,22 @@ def plot_signal(x, fs, mode="mpx", deviation_hz=75e3, fname="signal.png"):
     ax[0, 1].set_ylabel("|x|")
     ax[0, 1].set_ylim(0, 1.5)
 
-    # (c) Spektrum des empfangenen FM-Signals.
-    #     Hinweis: bei fs = 240 kHz liegt die Carson-Bandbreite (~256 kHz)
-    #     knapp ausserhalb des abgetasteten Bandes — das Spektrum stoesst
-    #     sichtbar an die Bandgrenzen. Fuer die Geometriepruefung ohne
-    #     Belang, fuer spaetere Kreuzkorrelation lieber fs = 400 kHz.
+    # (c) Spektrum des empfangenen FM-Signals mit Carson-Bandbreite.
+    #     Die Carson-Marker werden aus dem *tatsaechlichen* Signal geholt,
+    #     nicht aus festen Zahlen: der reale Spitzenhub liegt unter dem
+    #     nominellen delta_f (m(t) erreicht seinen Schrankenwert 1 nie),
+    #     und die hoechste Modulationsfrequenz haengt vom Modus ab
+    #     (mpx: 38 kHz Traeger + Audio, tones: nur Audio).
     spec = np.fft.fftshift(np.fft.fft(ch0 * np.hanning(M)))
     f = np.fft.fftshift(np.fft.fftfreq(M, 1 / fs)) / 1e3
     psd = 20 * np.log10(np.abs(spec) + 1e-12)
     ax[1, 0].plot(f, psd - psd.max(), lw=0.8)
-    carson = (deviation_hz + 15e3) / 1e3        # halbe Carson-BW [kHz]
+    carson = FMStream(fs, deviation_hz=deviation_hz,
+                      mode=mode).carson_bandwidth_hz() / 2e3   # halbe BW [kHz]
     for s in (-carson, carson):
         ax[1, 0].axvline(s, color="r", ls="--", lw=1)
-    ax[1, 0].set_title("(c) FM-Spektrum, Kanal 0\n(rot: Carson-Bandbreite)")
+    ax[1, 0].set_title(f"(c) FM-Spektrum, Kanal 0\n"
+                       f"(rot: Carson-Bandbreite, {2*carson:.0f} kHz)")
     ax[1, 0].set_xlabel("Frequenz [kHz]")
     ax[1, 0].set_ylabel("Leistung [dB]")
     ax[1, 0].set_ylim(-80, 5)
@@ -98,9 +108,10 @@ def plot_signal(x, fs, mode="mpx", deviation_hz=75e3, fname="signal.png"):
     ax[1, 1].legend()
 
     fig.tight_layout()
-    fig.savefig(fname, dpi=120)
+    path = os.path.join(_HERE, fname)
+    fig.savefig(path, dpi=120)
     plt.close(fig)
-    return fname
+    return path
 
 
 def plot_array(x, geo, fname="array.png"):
@@ -154,6 +165,7 @@ def plot_array(x, geo, fname="array.png"):
     ax[1].legend()
 
     fig.tight_layout()
-    fig.savefig(fname, dpi=120)
+    path = os.path.join(_HERE, fname)
+    fig.savefig(path, dpi=120)
     plt.close(fig)
-    return fname
+    return path

@@ -76,7 +76,13 @@ class FMStream:
         self._phase = 0.0    # Restphase am Ende des letzten Blocks [rad]
 
     # -- modulierendes Signal m(t), normiert auf [-1, 1] ---------------
-    def _modulation(self, t):
+    def modulation(self, t):
+        """m(t) an den Zeitpunkten t [s]; Wertebereich garantiert [-1, 1].
+
+        Oeffentlich, weil run.py und Tests dasselbe m(t) unabhaengig vom
+        Stream noch einmal erzeugen muessen, um die Demodulation gegen
+        eine Referenz zu pruefen.
+        """
         audio = sum(a * np.sin(2 * np.pi * f * t) for f, a in self.tones)
         norm = sum(abs(a) for _, a in self.tones)
         audio = audio / norm                      # -> [-1, 1]
@@ -92,13 +98,45 @@ class FMStream:
                + 0.45 * diff * np.sin(2 * np.pi * SUBCARRIER_HZ * t))
         return mpx / 0.99     # feste Skalierung, Spitzenwert bleibt <= 1
 
+    # -- Kennwerte des erzeugten Signals -------------------------------
+    def max_modulation_hz(self):
+        """Hoechste im modulierenden Signal m(t) enthaltene Frequenz [Hz].
+
+        "tones" — die hoechste Audiofrequenz.
+        "mpx"   — die obere Kante des DSB-Seitenbands um den 38-kHz-Traeger,
+                  also SUBCARRIER_HZ + hoechste Audiofrequenz.
+        """
+        f_audio = max(f for f, _ in self.tones)
+        return f_audio if self.mode == "tones" else SUBCARRIER_HZ + f_audio
+
+    def peak_deviation_hz(self, duration_s=1.0):
+        """Tatsaechlich auftretender Spitzenhub max|f(t)| = delta_f * max|m(t)|.
+
+        Wichtig: die Normierung von m(t) garantiert nur die *obere Schranke*
+        |m| <= 1. Der Spitzenwert wird in der Praxis nicht erreicht, weil die
+        Toene nicht gleichzeitig ihr Maximum haben — im "mpx"-Modus liegt er
+        bei rund 0.70, der reale Hub also bei rund 52 statt 75 kHz. Das ist
+        der Grund, warum das Signal deutlich schmaler ist, als der nominelle
+        Hub vermuten laesst.
+        """
+        t = np.arange(int(self.fs * duration_s)) / self.fs
+        return self.deviation_hz * float(np.max(np.abs(self.modulation(t))))
+
+    def carson_bandwidth_hz(self):
+        """Carson-Bandbreite B = 2 * (Spitzenhub + hoechste Modulationsfrequenz).
+
+        Faustformel fuer die belegte HF-Bandbreite einer FM. Sie ist
+        bewusst konservativ; die 99-%-Leistungsbandbreite liegt darunter.
+        """
+        return 2.0 * (self.peak_deviation_hz() + self.max_modulation_hz())
+
     def next_block(self, block_size):
         """Liefert die naechsten block_size Samples als complex128."""
         # Absolute Zeitachse -> m(t) laeuft nahtlos weiter
         t = (self._n + np.arange(block_size)) / self.fs
         self._n += block_size
 
-        m = self._modulation(t)
+        m = self.modulation(t)
         inst_freq = self.deviation_hz * m                 # f(t) [Hz]
 
         # Phasenintegration; self._phase traegt den Zustand des Vorblocks

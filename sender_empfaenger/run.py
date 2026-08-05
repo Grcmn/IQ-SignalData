@@ -80,7 +80,7 @@ def main(plot=False):
     # Referenz: dasselbe m(t) noch einmal auf derselben Zeitachse erzeugen
     ref = FMStream(FS_HZ, deviation_hz=DEVIATION_HZ, mode=MODE)
     t = np.arange(x.shape[1]) / FS_HZ
-    m_soll = ref._modulation(t)
+    m_soll = ref.modulation(t)
 
     # fm_demodulate bildet Differenzen -> ein Sample kuerzer
     m_hat = fm_demodulate(x[0], FS_HZ, DEVIATION_HZ)
@@ -88,6 +88,12 @@ def main(plot=False):
     rms = np.sqrt(np.mean(fehler**2)) / np.sqrt(np.mean(m_soll**2))
     print("\n=== Demodulations-Kontrolle (Kanal 0) ===")
     print(f"  m(t) rueckgewonnen: relativer RMS-Fehler = {rms*100:.4f} %")
+
+    # Bandbreitenkontrolle: passt das Signal ueberhaupt in fs?
+    print(f"  Spitzenhub  = {ref.peak_deviation_hz()/1e3:.1f} kHz "
+          f"(nominell {DEVIATION_HZ/1e3:.0f} kHz)")
+    print(f"  Carson-BW   = {ref.carson_bandwidth_hz()/1e3:.1f} kHz "
+          f"bei fs = {FS_HZ/1e3:.0f} kHz")
 
     # --- Grafik -------------------------------------------------------
     if plot:

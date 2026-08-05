@@ -1,3 +1,16 @@
+"""
+Empfaenger — vom Sendesignal zu den Daten der einzelnen Antennenkanaele.
+
+Zwei Funktionen, zwei Richtungen:
+    receive_array()  — Vorwaertsmodell: aus s(t) und dem Steering-Vektor
+                       die Kanalmatrix X der N Antennenelemente bilden.
+    fm_demodulate()  — Rueckwaerts zur Kontrolle: aus einem Kanal wieder
+                       das modulierende m(t) gewinnen.
+
+Diese Stufe modelliert ausschliesslich den *Direktpfad* Sender ->
+Empfaenger im Fernfeld. Bewusst noch nicht enthalten: Laufzeit,
+Daempfung, Rauschen, Zielecho, Doppler.
+"""
 
 import numpy as np
 
@@ -5,17 +18,17 @@ from transmitter import DEVIATION_HZ
 
 
 def receive_array(s, a, dtype=np.complex64):
-    """
+    """Kanalmatrix des Arrays fuer eine ebene Welle aus Richtung phi_tx.
 
-    Ebene Welle aus Richtung phi_tx: jedes Element sieht dasselbe Signal,
-    nur mit eigener Phasenlage aus dem Steering-Vektor a:
+    Jedes Element sieht dasselbe Signal, nur mit eigener Phasenlage aus
+    dem Steering-Vektor a:
 
         X_n(t) = a_n * s(t)
 
     s : (M,) complex        Basisbandsignal des Senders
     a : (N,) complex        Steering-Vektor des Arrays
     Rueckgabe
-    X : (N, M) complex      Kanalmatrix, ein Zeile je Antennenelement
+    X : (N, M) complex      Kanalmatrix, eine Zeile je Antennenelement
 
     Hier fehlen bewusst die gemeinsame Laufzeit tau = R/c und die
     Freiraumdaempfung des Direktpfads: beide wirken auf *alle* Kanaele
