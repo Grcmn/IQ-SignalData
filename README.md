@@ -8,7 +8,14 @@ DVB-T-basiertes Passivradar. Details: [SIGNALGENERATOR.md](SIGNALGENERATOR.md)
 ## Projektstruktur
 
 ```
-prsim/                      Signalgenerator-Paket
+sender_empfaenger/          aktueller Stand: FM-Sender -> 7-Element-UCA
+  transmitter.py              FM-Basisband, blockweise (FMStream)
+  uca.py                      Geometrie des Kreisarrays, Steering-Vektor
+  receiver.py                 Direktpfad-Empfang, Kontroll-Demodulation
+  stream.py                   IQ-Datenstrom (7, block) + Parameter
+  plots.py                    Kontrollgrafiken
+  run.py                      Einstiegspunkt (--plot fuer Grafiken)
+prsim/                      frueherer Stand: Signalgenerator-Paket
   waveform.py                 Illuminator-Waveforms (DVB-T, DAB, FM)
   geometry.py                 3D-Geometrie, Radargleichung, Rauschbilanz
   channel.py                  zeitvariable fraktionale Verzögerung

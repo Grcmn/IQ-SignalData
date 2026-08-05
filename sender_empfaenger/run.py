@@ -1,92 +1,107 @@
 """
-Demo Schritt 1: FM-Sender -> idealer Empfaenger -> Kontroll-Demodulation.
+Einstiegspunkt: IQ-Datenstrom am 7-Element-UCA erzeugen und pruefen.
 
 Ablauf:
-    1. Sendesignal erzeugen (transmitter.generate_fm)
-    2. Ideal empfangen             (receiver.receive)
-    3. Zur Validierung demodulieren (receiver.fm_demodulate)
-    4. Ergebnisse anschauen: Zeitsignal, Spektren, Rueckgewinnung
+    1. Geometrie des Arrays und Einfallsrichtung des Senders ausgeben
+    2. Datenstrom blockweise erzeugen (stream.fm_uca_stream)
+    3. Kontrollen: Phasendifferenzen, Blockgrenzen, Einhuellende,
+       Rueckgewinnung des modulierenden Signals m(t)
+    4. optional Kontrollgrafiken (plots.py)
 
 Aufruf:
     python run.py
+    python run.py --plot
 """
 
+import argparse
+
 import numpy as np
-import matplotlib.pyplot as plt
 
-from transmitter import generate_fm, PILOT_HZ, SUBCARRIER_HZ
-from receiver import receive, fm_demodulate
+from receiver import fm_demodulate
+from stream import (BLOCK_SIZE, DEVIATION_HZ, FC_HZ, FS_HZ, MODE, N, N_BLOCKS,
+                    D_OVER_LAMBDA, RX_POS_M, TX_POS_M, fm_uca_stream,
+                    stream_info)
+from transmitter import FMStream
 
-# --- Parameter --------------------------------------------------------
-FS = 400e3           # Abtastrate 400 kHz (> Carson-Bandbreite ~256 kHz)
-DAUER_S = 0.02       # Signaldauer in Sekunden
-SEED = 1
 
-n_samples = int(FS * DAUER_S)
+def main(plot=False):
+    g = stream_info()
 
-# --- 1) Senden --------------------------------------------------------
-tx_iq, tx_mpx = generate_fm(n_samples, FS, seed=SEED, return_mpx=True)
-print(f"Gesendet:  {n_samples} I/Q-Samples bei fs = {FS/1e3:.0f} kHz")
-print(f"           mittlere Leistung = {np.mean(np.abs(tx_iq)**2):.4f}  "
-      f"(soll ~1)")
-print(f"           |iq| konstant?    min={np.abs(tx_iq).min():.4f}  "
-      f"max={np.abs(tx_iq).max():.4f}  (soll ~1, konstante Einhuellende)")
+    print("=== Geometrie ===")
+    print(f"  fc            = {FC_HZ/1e6:.1f} MHz   ->  lambda = {g['lam']:.3f} m")
+    print(f"  Elementabstand d = {D_OVER_LAMBDA} * lambda "
+          f"= {D_OVER_LAMBDA*g['lam']:.3f} m")
+    print(f"  Arrayradius   r = {g['r']:.3f} m  (N = {N} Elemente)")
+    print(f"  Sender bei    {TX_POS_M} m,  Empfaenger bei {RX_POS_M} m")
+    print(f"  Azimut phi_tx = {np.degrees(g['phi_tx']):.3f} deg")
+    print("  alpha_n [deg] = "
+          + ", ".join(f"{np.degrees(x):+.2f}" for x in g['alpha']))
 
-# --- 2) Empfangen (ideal) --------------------------------------------
-rx_iq = receive(tx_iq)
-print(f"Empfangen: identisch zum Sendesignal? {np.allclose(rx_iq, tx_iq)}")
+    # Sollwert fuer die Kontrolle: Phasendifferenz Kanal 1 gegen Kanal 0
+    soll = np.angle(np.exp(1j * (g['alpha'][1] - g['alpha'][0])))
+    print(f"\n  erwartete Phasendifferenz Kanal 1 - Kanal 0 = "
+          f"{np.degrees(soll):+.4f} deg")
 
-# --- 3) Demodulieren (Kontrolle) -------------------------------------
-rx_mpx = fm_demodulate(rx_iq, FS)
-# Fehler zwischen gesendetem und zurueckgewonnenem MPX
-fehler = rx_mpx - tx_mpx[1:]
-rms = np.sqrt(np.mean(fehler**2)) / np.sqrt(np.mean(tx_mpx**2))
-print(f"MPX-Rueckgewinnung: relativer RMS-Fehler = {rms*100:.3f} %")
+    # --- Datenstrom ---------------------------------------------------
+    print(f"\n=== Datenstrom ({N_BLOCKS} Bloecke a {BLOCK_SIZE} Samples) ===")
+    max_abw = 0.0
+    blocks = []
+    for i, block in enumerate(fm_uca_stream(n_blocks=N_BLOCKS, mode=MODE)):
+        blocks.append(block)
+        # Phasendifferenz zwischen Kanal 0 und 1: Kanal 1 * conj(Kanal 0)
+        # eliminiert das gemeinsame Signal s(t); uebrig bleibt a_1*conj(a_0),
+        # also eine ueber die ganze Zeit *konstante* Phase.
+        dphi = np.angle(block[1] * np.conj(block[0]))
+        abw = np.max(np.abs(np.angle(np.exp(1j * (dphi - soll)))))
+        max_abw = max(max_abw, abw)
+        print(f"  Block {i:2d}: shape={block.shape}  dtype={block.dtype}  "
+              f"dphi(1-0) = {np.degrees(dphi.mean()):+.4f} deg  "
+              f"(Streuung {np.degrees(dphi.std()):.2e} deg)")
 
-# --- 4) Darstellung ---------------------------------------------------
-fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+    print(f"\n  max. Abweichung vom Sollwert ueber alle Bloecke: "
+          f"{np.degrees(max_abw):.2e} deg")
 
-# (a) I/Q im Zeitbereich (kurzer Ausschnitt)
-n_show = 200
-ax[0, 0].plot(np.arange(n_show) / FS * 1e6, tx_iq[:n_show].real, label="I")
-ax[0, 0].plot(np.arange(n_show) / FS * 1e6, tx_iq[:n_show].imag, label="Q")
-ax[0, 0].set_title("Sendesignal I/Q (Zeitbereich)")
-ax[0, 0].set_xlabel("Zeit [us]")
-ax[0, 0].set_ylabel("Amplitude")
-ax[0, 0].legend()
+    # Kontrolle der Blockgrenzen: bei fortgefuehrter Phase darf der Sprung
+    # zwischen letztem und erstem Sample benachbarter Bloecke nicht groesser
+    # sein als der typische Sprung *innerhalb* eines Blocks.
+    innen = np.abs(np.angle(blocks[0][0, 1:] * np.conj(blocks[0][0, :-1]))).max()
+    grenze = np.abs(np.angle(blocks[1][0, 0] * np.conj(blocks[0][0, -1])))
+    print(f"  Phasensprung an der Blockgrenze: {np.degrees(grenze):.3f} deg  "
+          f"(max. innerhalb eines Blocks: {np.degrees(innen):.3f} deg)")
 
-# (b) Betrag der Einhuellenden (soll konstant = 1 sein)
-ax[0, 1].plot(np.arange(n_show) / FS * 1e6, np.abs(tx_iq[:n_show]))
-ax[0, 1].set_title("Einhuellende |iq| (konstant -> FM)")
-ax[0, 1].set_xlabel("Zeit [us]")
-ax[0, 1].set_ylabel("|iq|")
-ax[0, 1].set_ylim(0, 1.5)
+    # Betrag: reine FM -> konstante Einhuellende auf jedem Kanal
+    print(f"  |X| min/max = {np.abs(blocks[0]).min():.4f} / "
+          f"{np.abs(blocks[0]).max():.4f}  (soll ~1)")
 
-# (c) Leistungsspektrum des FM-Signals
-spec = np.fft.fftshift(np.fft.fft(tx_iq * np.hanning(n_samples)))
-f = np.fft.fftshift(np.fft.fftfreq(n_samples, 1 / FS)) / 1e3
-psd = 20 * np.log10(np.abs(spec) + 1e-12)
-ax[1, 0].plot(f, psd - psd.max())
-ax[1, 0].set_title("Spektrum des FM-Sendesignals")
-ax[1, 0].set_xlabel("Frequenz [kHz]")
-ax[1, 0].set_ylabel("Leistung [dB]")
-ax[1, 0].set_ylim(-80, 5)
+    # --- Demodulations-Kontrolle --------------------------------------
+    # Der gesamte Strom als eine Matrix (N, N_BLOCKS*BLOCK_SIZE)
+    x = np.concatenate(blocks, axis=1)
 
-# (d) Spektrum des demodulierten MPX: Pilot bei 19 kHz + Stereo um 38 kHz
-mpx_spec = np.fft.rfft(rx_mpx * np.hanning(len(rx_mpx)))
-mpx_f = np.fft.rfftfreq(len(rx_mpx), 1 / FS) / 1e3
-mpx_psd = 20 * np.log10(np.abs(mpx_spec) + 1e-12)
-ax[1, 1].plot(mpx_f, mpx_psd - mpx_psd.max())
-ax[1, 1].axvline(PILOT_HZ / 1e3, color="r", ls="--", lw=1, label="19 kHz Pilot")
-ax[1, 1].axvline(SUBCARRIER_HZ / 1e3, color="g", ls="--", lw=1,
-                 label="38 kHz Stereo")
-ax[1, 1].set_title("Demoduliertes MPX (Empfaenger)")
-ax[1, 1].set_xlabel("Frequenz [kHz]")
-ax[1, 1].set_ylabel("Leistung [dB]")
-ax[1, 1].set_xlim(0, 60)
-ax[1, 1].set_ylim(-80, 5)
-ax[1, 1].legend()
+    # Referenz: dasselbe m(t) noch einmal auf derselben Zeitachse erzeugen
+    ref = FMStream(FS_HZ, deviation_hz=DEVIATION_HZ, mode=MODE)
+    t = np.arange(x.shape[1]) / FS_HZ
+    m_soll = ref._modulation(t)
 
-fig.tight_layout()
-fig.savefig("sender_empfaenger.png", dpi=120)
-print("Grafik gespeichert: sender_empfaenger.png")
+    # fm_demodulate bildet Differenzen -> ein Sample kuerzer
+    m_hat = fm_demodulate(x[0], FS_HZ, DEVIATION_HZ)
+    fehler = m_hat - m_soll[1:]
+    rms = np.sqrt(np.mean(fehler**2)) / np.sqrt(np.mean(m_soll**2))
+    print("\n=== Demodulations-Kontrolle (Kanal 0) ===")
+    print(f"  m(t) rueckgewonnen: relativer RMS-Fehler = {rms*100:.4f} %")
+
+    # --- Grafik -------------------------------------------------------
+    if plot:
+        import plots
+        print("\n=== Grafiken ===")
+        print("  gespeichert:", plots.plot_signal(x, FS_HZ, mode=MODE,
+                                                  deviation_hz=DEVIATION_HZ))
+        print("  gespeichert:", plots.plot_array(x, g))
+
+    return x
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--plot", action="store_true",
+                   help="Kontrollgrafiken erzeugen (signal.png, array.png)")
+    main(plot=p.parse_args().plot)
