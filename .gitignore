@@ -1,6 +1,6 @@
 # Python
 __pycache__/
 *.pyc
-
+*.png
 # Generierte Daten und Plots
 output/
