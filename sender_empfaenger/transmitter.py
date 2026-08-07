@@ -4,16 +4,12 @@ import numpy as np
 PILOT_HZ = 19e3          
 DEVIATION_HZ = 75e3      
 AUDIO_CUTOFF_HZ = 15e3
-
-
 class FMStream:
     
     def __init__(self, fs, left, right, deviation_hz=DEVIATION_HZ,
-                 pilot_hz=PILOT_HZ, use_rds=False):
+                 pilot_hz=PILOT_HZ):
         if len(left) != len(right):
             raise ValueError("left und right muessen gleich lang sein")
-        if use_rds:
-            raise NotImplementedError("RDS ist noch nicht implementiert")
 
         self.fs = float(fs)
         self.left = np.asarray(left, dtype=np.float64)
@@ -66,3 +62,4 @@ class FMStream:
         self._phase = float(phase[-1])
 
         return np.exp(1j * phase)
+    
