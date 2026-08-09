@@ -9,7 +9,7 @@ class FMStream:
     def __init__(self, fs, left, right, deviation_hz=DEVIATION_HZ,
                  pilot_hz=PILOT_HZ):
         if len(left) != len(right):
-            raise ValueError("left und right muessen gleich lang sein")
+            raise ValueError("l und r ungleich")
 
         self.fs = float(fs)
         self.left = np.asarray(left, dtype=np.float64)
