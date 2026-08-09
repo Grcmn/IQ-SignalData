@@ -1,9 +1,10 @@
 
 import numpy as np
 
-PILOT_HZ = 19e3          
-DEVIATION_HZ = 75e3      
-AUDIO_CUTOFF_HZ = 15e3
+PILOT_HZ = 19e3
+DEVIATION_HZ = 75e3
+
+
 class FMStream:
     
     def __init__(self, fs, left, right, deviation_hz=DEVIATION_HZ,
@@ -29,13 +30,6 @@ class FMStream:
     def remaining(self):
         """Noch nicht ausgegebene Samples."""
         return self.n_samples - self._n
-
-    def max_modulation_hz(self):
-        return 2.0 * self.pilot_hz + AUDIO_CUTOFF_HZ
-
-    def carson_bandwidth_hz(self):
-        #Carson-Bandbreite B = 2*(delta_f + f_max).
-        return 2.0 * (self.deviation_hz + self.max_modulation_hz())
 
     def _multiplex(self, n0, count):
         t = (n0 + np.arange(count)) / self.fs

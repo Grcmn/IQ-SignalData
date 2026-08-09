@@ -1,6 +1,4 @@
 
-import numpy as np
-
 from audio import load_audio
 from receiver import receive_array
 from transmitter import DEVIATION_HZ, PILOT_HZ, FMStream
@@ -23,7 +21,6 @@ ARRAY_RADIUS_M = None
 # Datenstrom
 BLOCK_SIZE = 4096
 N_BLOCKS = 30
-CPI_S = 0.5
 
 def fm_uca_stream(fc=FC_HZ, fs=FS_HZ, n=N, d_over_lambda=D_OVER_LAMBDA,
                   r=ARRAY_RADIUS_M, tx_pos=TX_POS_M, rx_pos=RX_POS_M,

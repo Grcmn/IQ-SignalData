@@ -18,11 +18,6 @@ def element_angles(n=N_ELEMENTS):
     return 2.0 * np.pi * np.arange(n) / n
 
 
-def element_positions(r, n=N_ELEMENTS):
-    phi = element_angles(n)
-    return np.stack([r * np.cos(phi), r * np.sin(phi)], axis=1)
-
-
 def azimuth(tx_pos, rx_pos=(0.0, 0.0)):
     return np.arctan2(tx_pos[1] - rx_pos[1], tx_pos[0] - rx_pos[0])
 

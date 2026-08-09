@@ -9,12 +9,6 @@ SAMPLE_DTYPE = np.float32
 
 
 class IQWriter:
-    """Schreibt Bloecke der Form (n_antennas, T) fortlaufend in eine .dat.
-
-    Layout auf der Platte: [time][iq][antenna] als float32 in C-Order, d.h.
-    pro Zeitschritt erst alle I-Werte (Antenne 0..n-1), dann alle Q-Werte.
-    Die Datei selbst traegt keine Form -- die steht im JSON-Sidecar daneben.
-    """
 
     def __init__(self, path, n_antennas, meta=None):
         self.path = Path(path)
@@ -34,7 +28,7 @@ class IQWriter:
         return self._n
 
     def write(self, x):
-        """x: (n_antennas, T) komplex. Gibt die Anzahl geschriebener Samples zurueck."""
+    
         if self._fh is None:
             raise RuntimeError("Writer ist bereits geschlossen")
         if x.ndim != 2 or x.shape[0] != self.n_antennas:
@@ -85,11 +79,7 @@ class IQWriter:
 
 
 def load_iq(path):
-    """Liest eine mit IQWriter erzeugte .dat zurueck.
 
-    Gibt (x, meta) zurueck, x hat die Form (T, n_antennas) und ist komplex --
-    also transponiert gegenueber dem, was receive_array liefert.
-    """
     path = Path(path)
     meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     n_ant = int(meta["n_antennas"])
