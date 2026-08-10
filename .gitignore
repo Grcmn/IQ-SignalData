@@ -3,4 +3,4 @@ __pycache__/
 *.pyc
 *.png
 # Generierte Daten und Plots
-output/
+output_iq/

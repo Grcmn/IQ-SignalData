@@ -1,0 +1,281 @@
+
+Teil 0 — Warum ein Skript und kein pytest
+pytest ist in dieser Umgebung nicht installiert (ModuleNotFoundError). Unabhängig davon wäre ein eigenständiges Skript hier die bessere Wahl:
+
+Du willst die Werte lesen (erste 30 int16, Soll/Ist-Phasen in Grad). pytest unterdrückt stdout bei bestandenen Tests; man bräuchte -s und hätte trotzdem keine Ergebnistabelle.
+Für die Arbeit brauchst du ein reproduzierbares Protokoll im Anhang — das Skript erzeugt es direkt.
+Keine zusätzliche Abhängigkeit in der Signalkette.
+Es liefert trotzdem einen Exitcode (0 = alles bestanden, gemessen: exit=0), ist also CI-tauglich.
+
+Neue Dateien:
+
+verify_iq_writer.py — die 10 Prüfungen
+explain_iq_layout.py — die Messungen für Teil 2
+Der Writer wurde nicht verändert und nicht gemockt — geschrieben wird immer durch die echte IQWriterInt16.
+
+Teil 1 — Verifikation
+Ergebnistabelle
+Prüfung	gemessen	Akzeptanzkriterium	bestanden
+1.1 Dateigröße [Byte]	1344	== 1344 (3·16·7·4)	JA
+1.2a abweichende int16-Werte	0	== 0	JA
+1.2a Achsen-Inkremente (a, f, t)	(1, 100, 10000)	== (1, 100, 10000)	JA
+1.2b erkennt vertauschte Achsen	f↔a erkannt, t↔f erkannt	beide erkannt	JA
+1.3 Abweichungen bei 14 Tripeln	0	== 0 (bitgenau)	JA
+1.4 Werte ≠ 0 in inaktiven Slots	0 von 1050	== 0	JA
+1.5 Bytefolge re=1 / re=258	01 00 00 00 02 01 00 00	genau diese Folge	JA
+1.5 dtype im Quelltext	'<i2'	'<i2', nicht np.int16	JA
+1.6 max. komplexer Betragsfehler	4.301949e-05	≤ 4.315837e-05	JA
+1.6b Fehler über load_iq_int16	4.301949e-05	≤ 4.358996e-05	JA
+1.7a n_clipped reguläre Daten	0	== 0	JA
+1.7b Sättigung positiv	32767	== 32767, nicht negativ	JA
+1.7c Sättigung negativ	-32768	== -32768	JA
+1.7d n_clipped bei Übersteuerung	28	== 28 (7 Ant. × 4 Komp.)	JA
+1.8 abweichende Bytes 1 vs. 5 Blöcke	0	== 0 (bitidentisch)	JA
+1.9a Dateigröße == Sidecar-Vorhersage	348096	== 348096	JA
+1.9b n_samples	777	== 777	JA
+1.9c bytes_per_time_step	448	== 448	JA
+1.9d Rekonstruktion nur aus Sidecar	identisch	bitidentisch	JA
+1.10a max |Δφ| über (t,n) [Grad]	0.005448	≤ 0.006182	JA
+1.10b Zeitkonstanz [Grad]	0.005469	≤ 0.006182	JA
+21/21 bestanden, 0 gescheitert.
+
+Die aussagekräftigsten Rohausgaben
+1.2a — die ersten 30 int16 (Klartext, scale=1.0, re = t·10000 + f·100 + a, im = -re):
+
+
+ist :   0    0    1   -1    2   -2    3   -3    4   -4    5   -5    6   -6  100 -100
+      101 -101  102 -102  103 -103  104 -104  105 -105  106 -106  200 -200
+soll:  (identisch)
+Positionen 0–13 sind t=0, f=0, a=0..6 — die Antenne läuft am schnellsten, Schrittweite 1. Bei Position 14 springt es auf 100, also f=1. Die gemessenen Inkremente (antenna, freq, time) = (1, 100, 10000) sind genau die Signatur von [time][freq][antenna].
+
+1.2b — die Negativkontrolle greift. Ich habe die Pipeline mit falschen Permutationen nachgebaut:
+
+
+perm=(2,0,1) [t][f][a] korrekt :   0  0   1  -1   2  -2   3  -3 ...
+perm=(2,1,0) [t][a][f] falsch  :   0  0 100 -100 200 -200 300 -300 ...   <- 100er-Schritte innen
+perm=(0,2,1) [f][t][a] falsch  :   0  0   1  -1 ... 10000 -10000          <- t springt zu früh
+Beide Fehllayouts werden erkannt. Der Test ist also nicht trivial erfüllbar.
+
+1.3 — Adressformel gegen seek+struct.unpack('<hh'), 14 Tripel, alle bitgenau:
+
+
+(t= 2, f= 5, a=1) off=  1040  seek=( 20501,-20501)  numpy=( 20501,-20501)  ok
+(t= 1, f= 0, a=0) off=   448  seek=( 10000,-10000)  numpy=( 10000,-10000)  ok
+(t= 2, f=15, a=6) off=  1340  seek=( 21506,-21506)  numpy=( 21506,-21506)  ok
+Der Wert an der Byteposition kodiert seine eigenen Indizes — damit ist nicht nur „gleich", sondern „an der richtigen Stelle" belegt.
+
+1.5 — Endianness. Ich habe zwei Werte gewählt, weil 1 allein schwach ist (01 00 vs. 00 01 unterscheidet nur ein Byte). 258 = 0x0102 ist eindeutig:
+
+
+Bytes 0..7 : 01 00 00 00 02 01 00 00
+  Wert 1   -> 01 00   (big-endian wäre 00 01)
+  Wert 258 -> 02 01   (big-endian wäre 01 02)
+Eine Feinheit, die dir auffallen wird: das Skript druckt dtype('int16') mit byteorder='='. numpy normalisiert <i2 auf einer Little-Endian-Maschine zu „native". Der belastbare Test ist deshalb SAMPLE_DTYPE.str == '<i2' — der ist bestanden. Die explizite Schreibweise in iq_writer.py:22 ist trotzdem richtig: auf einem Big-Endian-Host würde numpy beim Schreiben byteswappen, np.int16 würde still Big-Endian herausschreiben.
+
+1.6 — Quantisierung:
+
+
+max |x - x_hat|       = 4.301949e-05
+theoretische Schranke = sqrt(2)*0.5/scale = 4.315837e-05   (99.68 % ausgeschöpft)
+RMS-Fehler            = 2.488143e-05
+99.68 % Ausschöpfung ist genau, was man will: die Schranke ist scharf, nicht großzügig. Wäre die Messung bei 50 %, wäre der Test schwach.
+
+1.7 — Sättigung statt Wraparound:
+
+
+Eingabe  +3.0 * 16384 = 49152   -> Datei: 32767
+Eingabe  -3.0 * 16384 = -49152  -> Datei: -32768
+Kontrolle: der Wraparound-Wert wäre -16384 -- tritt hier NICHT auf
+1.10 — Phasen gegen den Steering-Vektor (echtes uca.steering_vector und receiver.receive_array, fc = 89.5 MHz, d/λ = 0.4, r = 1.5440 m, φ = 30.9638°):
+
+
+Ant |  Soll [deg] |   Ist [deg] |  |Delta| [deg]
+  0 |    0.000000 |    0.000000 |      0.000000
+  1 |   13.174909 |   13.174919 |      0.000010
+  2 |  -90.722202 |  -90.722165 |      0.000037
+  3 |  126.545312 |  126.545284 |      0.000028
+  4 |   52.457923 |   52.457912 |      0.000011
+  5 |  102.804947 |  102.804968 |      0.000021
+  6 | -120.325953 | -120.325954 |      0.000001
+
+max. Abweichung über alle (t,n): 0.005448 deg
+Schranke aus Quantisierung     : 0.006182 deg
+max. Schwankung über die Zeit  : 0.005469 deg
+Die Schranke ist nicht geraten, sondern hergeleitet: jeder Kanal trägt höchstens arcsin(ε/|z|) bei, mit ε = √2/2 LSB und |z| = 13106.5 aus der Messung; die Differenz zweier Kanäle also das Doppelte. Die Tabelle zeigt den über die Zeit gemittelten Wert (Fehler mittelt sich weg, Δ ≈ 3e-5°), das Kriterium prüft jeden einzelnen Zeitpunkt.
+
+Als Annahme gekennzeichnet: ich habe für 1.10 eine synthetische konstantmodulige Quelle statt audio_music.mp3 verwendet — deterministisch, seedbar, ohne mp3-Decoder-Abhängigkeit. Steering-Vektor und Empfangsmodell sind die echten aus deinem Code. Die Aussage gilt damit für die Signalkette; sie ist keine Aussage über die FM-Modulation selbst.
+
+Teil 2 — Der Writer, Zeile für Zeile
+Konstanten und Konstruktor
+iq_writer.py:22 SAMPLE_DTYPE = np.dtype("<i2") — < = little-endian, i = signed integer, 2 = 2 Byte. Die Absicht steht im Quelltext, nicht in einer Annahme über die Plattform.
+
+iq_writer.py:24 FULL_SCALE = 32767 ist der positive Rand. Der negative ist -FULL_SCALE - 1 = -32768 — Zweierkomplement ist asymmetrisch. Das taucht konsequent in Zeile 103 und 105 auf.
+
+iq_writer.py:30 DEFAULT_SCALE = 2**14 = 16384. Eine Zweierpotenz ist hier nicht kosmetisch: die Multiplikation ist exakt (nur der Exponent ändert sich), es entsteht kein zusätzlicher Rundungsfehler vor rint.
+
+iq_writer.py:45 Das Handle wird einmal geöffnet und über die ganze Aufnahme offen gehalten. Genau deshalb ist Prüfung 1.8 bestanden.
+
+iq_writer.py:59-60 bytes_per_sample = n_freq * n_antennas * 4 = 448. Das ist die Konstante, an der auf der C-Seite alles hängt.
+
+write() — der Einzelslot-Pfad, iq_writer.py:62-75
+Zeile 73 legt np.zeros((n_freq, n_ant, T), complex128) an, Zeile 74 schreibt deine (n_ant, T)-Daten in Slot freq_index. Der Zero-Fill entsteht hier — durch zeros, nicht durch einen Extra-Schritt. Zeile 75 delegiert an write_multi, es gibt also nur einen Codepfad zur Datei.
+
+write_multi() — der eigentliche Kern
+1. Strides und Speicherlayout
+Gemessen mit x der Form (16, 7, 4096) complex128 (itemsize 16 Byte):
+
+Schritt	Zeile	shape	strides (Byte)	C_CONTIGUOUS
+x (Eingabe)	77	(16, 7, 4096)	(458752, 65536, 16)	True
+np.transpose(x,(2,0,1))	93	(4096, 16, 7)	(16, 458752, 65536)	False
+block.real (View)	97	(4096, 16, 7)	(16, 458752, 65536)	False
+np.stack([re,im],axis=-1)	97	(4096, 16, 7, 2)	(16, 458752, 65536, 8)	False
+* scale	97	(4096, 16, 7, 2)	(16, 458752, 65536, 8)	False
+np.rint(...)	101	(4096, 16, 7, 2)	(16, 458752, 65536, 8)	False
+np.clip(...)	105	(4096, 16, 7, 2)	(16, 458752, 65536, 8)	False
+.astype('<i2')	105	(4096, 16, 7, 2)	(4, 114688, 16384, 2)	False
+np.ascontiguousarray(...)	104	(4096, 16, 7, 2)	(448, 28, 4, 2)	True
+Wie man Strides liest: strides[k] ist die Byte-Anzahl, um die der Speicherzeiger springt, wenn Index k um 1 erhöht wird. Das Layout ist genau dann C-contiguous, wenn die Strides von rechts nach links das Produkt aus itemsize und den nachfolgenden Achsenlängen sind:
+
+
+Achse 3 (re/im)  :   2 = itemsize
+Achse 2 (antenna):   4 = 2 · 2
+Achse 1 (freq)   :  28 = 2 · 2 · 7
+Achse 0 (time)   : 448 = 2 · 2 · 7 · 16   <- exakt die Recordgröße
+Die Achsenreihenfolge liest man daran ab, welche Achse den kleinsten Stride hat — die läuft am schnellsten und liegt innen. In der letzten Zeile: 2 < 4 < 28 < 448, also [time][freq][antenna][re/im]. In der Zeile davor (nach astype): 2 < 4 aber dann 16384 > 114688? Nein — (4, 114688, 16384, 2): Achse 0 (time) hat Stride 4, ist also innen. Das ist noch die (freq, ant, time)-Anordnung des Eingangs, nur logisch umetikettiert.
+
+Das ist der zentrale Punkt: Zeile 93 verschiebt kein einziges Byte. transpose ändert nur das Strides-Tupel. Die gesamte Kette bis Zeile 105 rechnet in der ursprünglichen Speicheranordnung weiter. Physisch umsortiert wird erst in ascontiguousarray.
+
+2. Das transpose-Tupel, iq_writer.py:93
+np.transpose(x, perm) heißt: an Zielposition k kommt die Quellachse perm[k]. Quellachsen von x sind 0=freq, 1=antenna, 2=time.
+
+perm=(2,0,1) → Position 0 bekommt Quellachse 2 (time), Position 1 bekommt 0 (freq), Position 2 bekommt 1 (antenna) → [time][freq][antenna]. Gemessen an einer Form (3,4,5) = (freq, ant, time):
+
+Ziellayout	Tupel	Ergebnisform
+[time][freq][antenna] (aktuell)	(2, 0, 1)	(5, 3, 4)
+[time][antenna][freq]	(2, 1, 0)	(5, 4, 3)
+[freq][time][antenna]	(0, 2, 1)	(3, 5, 4)
+Merkhilfe zum Selbstherleiten: schreib das Ziellayout als Namen hin, schlag für jeden Namen den Quellindex nach, fertig. [time][antenna][freq] → time=2, antenna=1, freq=0 → (2,1,0).
+
+Wichtig: bei [time][antenna][freq] müsste auch die Adressformel mitgeändert werden zu ((t·n_ant + a)·n_freq + f)·4, und die C-Seite ebenso. Das Tupel allein reicht nicht. Bei [freq][time][antenna] kommt zusätzlich das Streaming-Problem dazu (Punkt 7).
+
+3. np.stack(..., axis=-1) statt .view(), iq_writer.py:97
+view deutet vorhandene Bytes um, ohne sie zu konvertieren. Gemessen an z = [1+2j, 3+4j] als complex128:
+
+
+z.view(np.float64)  = [1. 2. 3. 4.]                          <- funktioniert
+z.view('<i2')       = [0 0 0 16368  0 0 0 16384 ...]         <- Bitmuster, keine Amplituden
+Die 16368 ist ein Stück der IEEE-754-Darstellung von 1.0, keine skalierte Amplitude. Zwischen float64/float32 und int16 liegt eine Wertumrechnung (Skalierung, Rundung, Sättigung) — für Wertumrechnungen ist view grundsätzlich das falsche Werkzeug.
+
+Zweite, unabhängige Hürde: block.real ist ein nicht-zusammenhängender View mit Strides (16, 192, 64). Der Versuch schlägt hart fehl:
+
+
+block.real.view(np.float32) -> ValueError: To change to a dtype of a
+different size, the last axis must be contiguous
+view wäre möglich, wenn die Daten schon als int16-Paare im Speicher lägen — dann als reine Umetikettierung auf einen structured dtype:
+
+
+arr_int16.view(np.dtype([('re','<i2'),('im','<i2')]))
+[1 -1 2 -2]  ->  [(1, -1) (2, -2)]
+Das wäre der Weg für einen Leser, nicht für den Writer.
+
+axis=-1 hängt Real/Imag als letzte Achse an. Damit landen re und im unmittelbar nebeneinander — genau das Speicherbild von struct { int16_t re, im; }. axis=0 würde alle Realteile vor alle Imaginärteile legen (planar statt interleaved) und das C-Struct brechen.
+
+4. ascontiguousarray, iq_writer.py:104
+Antwort: nur Laufzeit, nicht Korrektheit. Gemessen am echten Pipeline-Puffer (1.84 MB, 4096 Zeitschritte, bestes von 7 Durchläufen):
+
+
+Pipeline vor ascontiguousarray: C_CONTIGUOUS = False, strides = (4, 114688, 16384, 2)
+ascontiguousarray(...) is raw_out : False   -> es wird tatsächlich kopiert
+
+MIT  ascontiguousarray, dann tofile  :    5.682 ms
+OHNE ascontiguousarray, direkt tofile:   44.196 ms
+davon reine Kopierzeit               :    4.089 ms
+Faktor:                                   7.78x
+
+Bytes identisch: True     abweichende Bytes: 0
+Also: die Bytes sind in beiden Fällen gleich — ndarray.tofile schreibt laut Dokumentation immer in logischer C-Reihenfolge, unabhängig vom physischen Layout. Die Korrektheit hängt nicht daran. Aber tofile iteriert dann elementweise mit riesigen Strides durch den Speicher (Achse freq springt 114 KB weit), was jede Cache-Zeile für 2 Byte Nutzlast lädt. ascontiguousarray macht daraus einen einzigen vektorisierten Umsortierdurchlauf und danach einen linearen Schreibvorgang. Faktor 7.8.
+
+Warum ist der Puffer überhaupt nicht-contiguous? Das ist das order='K'-Verhalten: stack, die Arithmetik, rint, clip und astype legen ihr Ergebnis in der Speicheranordnung der Eingabe ab, statt stur C-Order zu erzwingen. Die Eingabe ist der transponierte View — also bleibt die ganze Kette in der (freq, antenna, time)-Anordnung hängen und wird nur logisch als (time, freq, antenna) gelesen. Erst ascontiguousarray erzwingt order='C' und materialisiert die Permutation.
+
+Kurz: das transpose in Zeile 93 ist ein Versprechen, ascontiguousarray in Zeile 104 löst es ein. Ohne Zeile 104 würde tofile dasselbe Versprechen einlösen, nur langsam.
+
+Eine Anmerkung zu meiner eigenen ersten Erwartung: ich hatte angenommen, astype liefere bereits C-contiguous. Die Messung (is raw_out : False) widerlegt das — deshalb steht die Erklärung jetzt so im Skript.
+
+5. np.rint → np.clip → astype, iq_writer.py:101-105
+Zwei unabhängige Fehlerquellen, die astype allein beide hat. Gemessen:
+
+
+    Wert | astype allein | rint  | rint->clip->astype
+---------+---------------+-------+-------------------
+     2.4 |             2 |   2.0 |        2
+     2.5 |             2 |   2.0 |        2
+     2.6 |             2 |   3.0 |        3   <-- unterschiedlich
+     3.5 |             3 |   4.0 |        4   <-- unterschiedlich
+    -2.6 |            -2 |  -3.0 |       -3   <-- unterschiedlich
+ 49152.0 |        -16384 | 49152 |    32767   <-- unterschiedlich
+-49152.0 |         16384 |-49152 |   -32768   <-- unterschiedlich
+(a) Abschneiden statt Runden. astype schneidet Richtung Null ab. Der Fehler wäre bis zu 1 LSB statt 0.5 LSB und — schlimmer — systematisch zur Null hin. Das ist kein Rauschen, sondern eine amplitudenabhängige Verzerrung, die in der Kreuzkorrelation eines Passivradars als Fehlerteppich sichtbar wird. Deine Schranke aus 1.6 (√2·0.5/scale) gilt nur mit rint.
+
+(b) Überlauf. 49152.0 → -16384: aus dem stärksten positiven Signal wird ein starkes negatives. Das ist der Fehler, der eine Richtungsschätzung nicht verrauscht, sondern in die falsche Richtung dreht. clip erzwingt vorher Sättigung.
+
+Warum diese Reihenfolge und nicht clip vor rint? Bei genau 32767.5: clip liefert 32767 (in Ordnung), aber wenn rint danach käme, wäre rint(32767.5) = 32768 → Überlauf. Gemessen: rint(32767.5) = 32768.0, danach clip → 32767. clip muss der letzte Schritt vor astype sein, sonst kann der Rundungsschritt den Wertebereich wieder verlassen.
+
+astype ist danach ein reiner Typwechsel ohne Wertänderung — alle Werte liegen bereits als ganze Zahlen im gültigen Bereich vor.
+
+iq_writer.py:102-103 zählt vor dem Clippen. Der Zähler landet im Sidecar und ist deine stille Alarmanlage: n_clipped != 0 heißt, dass DEFAULT_SCALE für dieses Szenario zu groß ist. Gemessen in 1.7: 0 bei regulären Daten, 28 bei absichtlicher Übersteuerung.
+
+Typ-Nebenbemerkung (gemessen): bei complex64-Eingang über write_multi bleibt die Kette in float32 (NEP 50 — der Python-float in * self.scale ist „schwach"). Das ist unkritisch: float32 stellt ganze Zahlen bis 2²⁴ = 16777216 exakt dar, weit über 32767, die Rundung ist also verlustfrei. Über write() wird ohnehin auf complex128 hochgezogen (iq_writer.py:73).
+
+6. Der Zero-Fill der 15 unbelegten Slots
+Ohne ihn bräche die Adressformel, und zwar sofort. byte_offset(t,f,a) = ((t·n_freq + f)·n_ant + a)·4 setzt eine konstante Recordgröße von 448 Byte voraus. Schriebe man nur den belegten Slot, wären es 28 Byte pro Zeitschritt und die Formel läge ab t=1 daneben.
+
+Konkret bricht damit:
+
+Random Access. Die C-Seite springt per seek(t · 448) zu einem Zeitpunkt. Ohne feste Recordgröße bräuchte es eine Indextabelle oder einen Full-Scan.
+mmap. Ein memory-mapped Zugriff als comp_int16[T][16][7] funktioniert nur bei fester Geometrie.
+Format-Stabilität. Sobald ein zweiter Frequenzslot belegt wird, ändert sich sonst das Dateilayout — die C-Seite müsste angepasst werden. Mit Zero-Fill bleibt die Datei binärkompatibel, es werden nur andere Slots ungleich Null.
+Der Leser müsste wissen, welcher Slot belegt ist. freq_index steht derzeit nicht im Sidecar (siehe Anmerkung unten).
+Der Preis: Faktor 16 an Dateigröße. Bei 240 kHz × 448 Byte sind das 107,5 MB/s. Das ist die Zahl, die in deiner Arbeit stehen sollte, wenn du die Entscheidung begründest — sie ist bewusst gegen Speicherplatz und für Formatstabilität gefallen.
+
+7. Streaming: warum reines Anhängen reicht, iq_writer.py:107-108
+Weil die Zeit die äußerste Achse ist. Ein neuer Zeitschritt landet immer am Dateiende; die Bytes aller bereits geschriebenen Zeitschritte bleiben unberührt. Die Datei ist zu jedem Zeitpunkt eine gültige, nur kürzere Aufnahme. Deshalb genügt ein einziges tofile auf ein offenes Handle im wb-Modus, ohne seek, ohne Kenntnis der Gesamtlänge T im Voraus. Prüfung 1.8 belegt das: 1 Block à 5000 vs. Blöcke à [1, 2, 4096, 1, 900] ergeben bitidentische Dateien.
+
+Wäre die Zeit nicht außen — etwa bei [freq][time][antenna] — müsste sich Folgendes ändern:
+
+T müsste vorab bekannt sein, denn die Position von Frequenzslot f ist f · T · n_ant · 4. Ein Stream unbekannter Länge geht nicht mehr.
+Die Datei müsste vorab alloziert werden (z. B. truncate(total_bytes)).
+Pro Block wären 16 seek+write-Paare statt einem nötig, an 16 weit auseinanderliegenden Stellen — bei 4096er-Blöcken 16 Schreibvorgänge zu je 114 KB an verstreuten Offsets. Der Schreibdurchsatz bräche ein.
+Eine abgebrochene Aufnahme wäre unlesbar, nicht nur kürzer.
+Das ist ein guter Absatz für die Arbeit: die Achsenreihenfolge ist keine Geschmacksfrage, sie entscheidet über Streambarkeit.
+
+close() und das Sidecar, iq_writer.py:111-140
+shape (Zeile 125) wird aus self._n gebildet, dem Zähler der tatsächlich geschriebenen Zeitschritte — nicht aus einer geplanten Länge. Deshalb passt es auch bei abgebrochenem Stream. Prüfung 1.9 belegt, dass ein Leser, der nur das Sidecar kennt, die Datei bitidentisch rekonstruiert; der naive Leser in verify_iq_writer.py tut genau das und prüft dtype, byte_order, array_order und axis_order per assert, statt sie zu ignorieren.
+
+__exit__ (Zeile 145) ruft close(). Das with in run.py:44 ist damit die Garantie, dass das Sidecar überhaupt entsteht — ohne close() gibt es keine JSON-Datei, und die .dat wäre allein nicht interpretierbar.
+
+Was mir aufgefallen ist
+1. run.py stürzt mit VERIFY = True ab — reproduziert
+run.py:62-63 vergleicht original (7, T) gegen back.T. load_iq_int16 ohne freq_index liefert aber (T, 16, 7), transponiert also (7, 16, T). Gemessen:
+
+
+original (7, 100)   back (100, 16, 7)   back.T (7, 16, 100)
+FEHLER: ValueError operands could not be broadcast together with shapes (7,100) (7,16,100)
+Der Readback-Check läuft also nie durch. Vorschlag (nicht angewendet): in Zeile 62 den Slot mitgeben —
+
+
+back, _ = load_iq_int16(path, freq_index=0)      # (T, n_ant)
+Damit ergibt der Vergleich 3.05e-05, also den erwarteten Quantisierungsfehler. Und dann ist noch Zeile 65 zu prüfen: 'OK' if err == 0.0 verlangt exakte Gleichheit, was bei int16-Quantisierung niemals eintreten kann. Sinnvoll wäre err <= np.sqrt(2)*0.5/writer.scale.
+
+2. Stale Ausgabetext in run.py
+run.py:56-57 druckt Form ({written}, 2, {N}) float32 [time][iq][antenna]. Das beschreibt ein altes Format. Tatsächlich geschrieben wird ({written}, 16, 7) comp_int16 [time][freq][antenna]. In einer Arbeit, in der du Konsolenausgaben als Beleg abbildest, ist das gefährlich.
+
+3. freq_index steht nicht im Sidecar
+Das Sidecar sagt, dass es 16 Slots gibt, aber nicht, welcher belegt ist. Ein Auswerter muss das raten oder alle 16 scannen. Vorschlag: "active_freq_slots": [0] bei close() mitschreiben (der Writer müsste sich die benutzten Indizes merken). Auch fc_hz pro Slot wäre der natürliche Ort, sobald mehrere Slots belegt werden.
+
+4. Speicherbedarf im write()-Pfad
+iq_writer.py:73 alloziert pro Block (16, 7, T) complex128 = 7,3 MB bei T=4096, von denen 15/16 Nullen sind, und rechnet die komplette stack/rint/clip-Kette darauf. Für die aktuelle Blockgröße ist das unkritisch (ca. 6 ms), skaliert aber schlecht. Eine Variante, die den Ausgabepuffer direkt als (T, 16, 7, 2) int16 nullt und nur [:, freq_index] befüllt, wäre etwa 16× günstiger. Nicht angewendet — sag Bescheid, wenn ich das als Alternative implementieren soll; es müsste dann gegen verify_iq_writer.py bitidentisch nachweisbar sein.
+
+5. Kleinigkeit: FULL_SCALE ist nur der halbe Name
+FULL_SCALE = 32767 mit -FULL_SCALE - 1 an zwei Stellen (iq_writer.py:103, 105) ist korrekt, aber die Asymmetrie ist implizit. INT16_MAX = 32767 / INT16_MIN = -32768 als zwei Konstanten wäre selbsterklärender und näher an der C-Seite (<stdint.h>).
+
+Keiner dieser fünf Punkte betrifft das Dateiformat selbst — das ist nach den 21 Prüfungen belegt korrekt.

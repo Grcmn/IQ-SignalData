@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from iq_writer import IQWriter, load_iq
+from iq_writer import IQWriterInt16, load_iq_int16
 from stream import (BLOCK_SIZE, D_OVER_LAMBDA, FC_HZ, FS_HZ, N, N_BLOCKS,
                     RX_POS_M, TX_POS_M, fm_uca_stream)
 from uca import azimuth
@@ -41,7 +41,7 @@ def main():
     }
 
     kept = []
-    with IQWriter(path, N, meta=meta) as writer:
+    with IQWriterInt16(path, N, meta=meta) as writer:
         for i, block in enumerate(fm_uca_stream()):
             writer.write(block)
             if VERIFY:
@@ -59,7 +59,8 @@ def main():
 
     if VERIFY and kept:
         original = np.concatenate(kept, axis=1)          # (N, T)
-        back, _ = load_iq(path)                          # (T, N)
+        #back, _ = load_iq_int16(path)                          # (T, N)
+        back, _ = load_iq_int16(path, freq_index=0)
         err = float(np.max(np.abs(original - back.T)))
         print(f"Readback:    max |delta| = {err:.3e}  "
               f"{'OK' if err == 0.0 else 'ABWEICHUNG'}")
