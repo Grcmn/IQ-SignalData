@@ -56,4 +56,3 @@ class FMStream:
         self._phase = float(phase[-1])
 
         return np.exp(1j * phase)
-    
