@@ -1,45 +1,56 @@
+"""Orchestrierung: erzeugt blockweise das Arraysignal.
+Der Generator hält nur die Objekte zusammen. Die Physik steckt in
+geometry/target/scene, die Signalerzeugung in transmitter.
+"""
 
+import math
+
+from config import (ARRAY_RADIUS_M, AUDIO_PATH, BLOCK_SIZE, D_OVER_LAMBDA,
+                    DELAY_TAPS, DURATION_S, ECHO_AMPLITUDE_STATIC,
+                    ENABLE_ECHO, FREQS_HZ, FS_HZ, RX_POS_M, SYSTEM_LOSS_DB,
+                    TARGETS, TX_POS_M)
 from audio import load_audio
-from receiver import receive_array
+from scene import Scene
 from transmitter import DEVIATION_HZ, PILOT_HZ, FMStream
-from uca import (N_ELEMENTS, azimuth, radius_from_spacing, steering_vector, wavelength)
+from uca import N_ELEMENTS, radius_from_spacing, wavelength
 
-FC_HZ = 89.5e6            
-TX_POS_M = (5_000.0, 3_000.0)   
-AUDIO_PATH = "audio_music.mp3"    
+FC_HZ = FREQS_HZ[0]
 
-# Basisband
-FS_HZ = 240e3             
-DURATION_S = 0.6
 
-# Empfaenger
-RX_POS_M = (0.0, 0.0)    
-N = N_ELEMENTS    
-D_OVER_LAMBDA = 0.4
-ARRAY_RADIUS_M = None
-
-# Datenstrom
-BLOCK_SIZE = 4096
-N_BLOCKS = 30
-
-def fm_uca_stream(fc=FC_HZ, fs=FS_HZ, n=N, d_over_lambda=D_OVER_LAMBDA,
-                  r=ARRAY_RADIUS_M, tx_pos=TX_POS_M, rx_pos=RX_POS_M,
-                  audio_path=AUDIO_PATH, duration_s=DURATION_S,
-                  deviation_hz=DEVIATION_HZ, pilot_hz=PILOT_HZ,
-                  block_size=BLOCK_SIZE, n_blocks=N_BLOCKS):
-    
-    lam = wavelength(fc)
+def build_scene(fc=FC_HZ, fs=FS_HZ, n=N_ELEMENTS, d_over_lambda=D_OVER_LAMBDA,
+                r=ARRAY_RADIUS_M, tx_pos=TX_POS_M, rx_pos=RX_POS_M,
+                duration_s=DURATION_S, targets=TARGETS,
+                enable_echo=ENABLE_ECHO, n_taps=DELAY_TAPS,
+                loss_db=SYSTEM_LOSS_DB,
+                static_amplitude=ECHO_AMPLITUDE_STATIC):
+    """Baut die Szene auf. Getrennt vom Generator, damit run.py die
+    Kennwerte (Aussteuerung, erwartete CAF-Lage) vor dem Lauf abfragen kann."""
     if r is None:
-        r = radius_from_spacing(d_over_lambda * lam, n)
-    a = steering_vector(azimuth(tx_pos, rx_pos), fc, r, n)
+        r = radius_from_spacing(d_over_lambda * wavelength(fc), n)
 
-    left, right = load_audio(audio_path, fs, duration_s)
+    return Scene(targets=targets if enable_echo else [],
+                 tx=tx_pos, rx=rx_pos, fc=fc, fs=fs,
+                 array_radius=r, n_elements=n, duration_s=duration_s,
+                 n_taps=n_taps, loss_db=loss_db,
+                 static_amplitude=static_amplitude), r
+
+
+def fm_uca_stream(scene, fs=FS_HZ, audio_path=AUDIO_PATH,
+                  duration_s=DURATION_S, deviation_hz=DEVIATION_HZ,
+                  pilot_hz=PILOT_HZ, block_size=BLOCK_SIZE, n_blocks=None):
+    """Liefert blockweise (n_elements, block_size) 
+    """
+    if n_blocks is None:
+        n_blocks = math.ceil(duration_s * fs / block_size) #anzahl blöcke
+
+    left, right = load_audio(audio_path, fs, duration_s) #laden und vorverarbeitung des audios
     src = FMStream(fs, left, right, deviation_hz=deviation_hz,
                    pilot_hz=pilot_hz)
 
-    for _ in range(n_blocks):
-        s = src.next_block(block_size)    
-        if s.size == 0:               
+    for i in range(n_blocks):
+        s, phase = src.next_block(block_size)
+        if s.size == 0:                       # Audiomaterial erschoepft
             return
-        yield receive_array(s, a)  
-        
+        # i * block_size ist der absolute Sampleindex und damit die einzige
+        # Uhr des Systems. Siehe TargetEcho.process().
+        yield scene.process(s, phase, i * block_size)
