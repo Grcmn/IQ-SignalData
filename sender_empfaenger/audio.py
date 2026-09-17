@@ -1,6 +1,5 @@
 
 from fractions import Fraction
-
 import numpy as np
 from scipy.signal import resample_poly
 
@@ -21,7 +20,8 @@ def load_audio(path, fs, duration_s=None):
         m = int(round(duration_s * fs))
         left, right = left[:m], right[:m]
 
-    return _normalize(left, right)
+    #return _normalize(left, right)
+    return left, right #-> FM Stream(...)
 
 
 def _resample(x, fs_in, fs_out):
@@ -29,9 +29,10 @@ def _resample(x, fs_in, fs_out):
     if int(fs_in) == int(fs_out):
         return np.asarray(x, dtype=np.float64)
     ratio = Fraction(int(fs_out), int(fs_in))
+   
     return resample_poly(x, ratio.numerator, ratio.denominator)
 
-
+#wird aktuell nicht aufgerufen
 def _normalize(left, right):
 
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
